@@ -5,19 +5,17 @@ from web3 import Web3, RPCProvider
 from operator import itemgetter
 import time
 
-precision = 1000000000000000000
 
+precision = 1000000000000000000
 mkr_addr = "0xc66ea802717bfb9833400264dd12c2bceaa34a6d"
 weth_addr = "0xecf8f87f810ecf450940c9f60066b4a7a501d6a7" 
 geth_addr = "0xa74476443119A942dE498590Fe1f2454d7D4aC0d"
 market_addr = "0xa1B5eEdc73a978d181d1eA322ba20f0474Bb2A25"
-web3rpc = Web3(RPCProvider())
-
 acct_owner = "0x6E39564ecFD4B5b0bA36CD944a46bCA6063cACE5"
 
+web3rpc = Web3(RPCProvider())
 web3rpc.eth.defaultAccount = acct_owner
 web3rpc.eth.defaultBlock = "latest"
-# Can also be an integer or one of "latest", "pending", "earliest"
 
 with open('market.abi', 'r') as abi_file:
   abi_json = abi_file.read().replace('\n','')
@@ -34,7 +32,6 @@ mkr_contract = web3rpc.eth.contract(abi, address=mkr_addr)
 weth_balance = float(weth_contract.call().balanceOf(acct_owner))/precision
 mkr_balance  = float(mkr_contract.call().balanceOf(acct_owner))/precision
 
-print("\nBalances: %0.5f WETH - %0.5f MKR\n" % (weth_balance, mkr_balance))
 
 last_offer_id = market_contract.call().last_offer_id()
 
@@ -45,7 +42,7 @@ while id <  last_offer_id + 1:
   offers.append(market_contract.call().offers(id))
   id = id + 1
 
-
+print("\nBalances: %0.5f WETH - %0.5f MKR\n" % (weth_balance, mkr_balance))
 print("There are %i offers" % last_offer_id)
 
 id=0
@@ -70,8 +67,8 @@ for offer in offers:
       buy_orders.append([id, buy_how_much, sell_how_much/buy_how_much, buy_how_much, owner])
   id = id + 1
 
+#Sort the order books
 buy_orders.sort(key=itemgetter(2), reverse=True)
-print("%s" % buy_orders[0])
 bid_id = int(buy_orders[0][0])
 bid    = float(buy_orders[0][2])
 bid_qty     = float(buy_orders[0][1]) 
@@ -83,6 +80,7 @@ ask = float(sell_orders[0][2])
 ask_qty  = float(sell_orders[0][1]) 
 print ("Lowest ask is for %0.5f MKR @ %0.5f ETH/MKR" % (ask_qty,ask))
 
+#Make sure we have enough allowance
 if float(weth_contract.call().allowance(acct_owner, market_addr)) < 0.1:
   result = weth_contract.call().approve(acct_owner, int(0.1*precision))
   #print ("Update allowance: %s" % result)
@@ -102,29 +100,29 @@ print("MKR Allowance: %f" % (mkr_contract.call().allowance(acct_owner, market_ad
 if round(bid,5) >= round(ask,5):
   print("\nAction needed!")
   if bid_qty > ask_qty:
-    if weth_balance < 0.2:
-      print ("Not enough ETH!")
-    else:
-      print ("Buy from Ask book and sell to Bid book")
-      # Do stuff
+    if weth_balance < ask_qty:
+      qty = weth_balance
   else:
-    if mkr_balance < 0.1:
-      print ("Not enough MKR!")
-    else:
-      print ("Sell from Bid book and buy Ask book")
-      if mkr_balance > bid_qty:
-        bid_id = int(bid_id)
-        try:
-          if market_contract.call().buy(bid_id, int(bid_qty*bid*precision)) and market_contract.call().buy(ask_id, int(bid_qty/bid*precision)):
-            try: 
-              result = market_contract.transact().buy(bid_id, int(bid_qty*bid*precision))
-              print("%s" % result)
-              result = market_contract.transact().buy(ask_id, int(bid_qty*precision))
-              print("%s" % result)
-            except:
-              print("Transaction timed out.") 
-        except:
-          print("Sell: [%i] %f ETH [XXX]" % (ask_id, bid_qty*ask))
-          print("Sell: [%i] %f ETH [XXX]" % (bid_id, bid_qty))
+    if mkr_balance < bid_qty:
+      qty = mkr_balance
+  buy_book_amount  = int(qty*bid*precision)
+  sell_book_amount = int(qty/bid*precision)
+  while not fix_books(buy_book_amount, sell_book_amount, bid_id, ask_id)[0]:
+    print("Something went wrong, trying again")
+    time.sleep(5)
+  print("Settled order for %0.5f MKR" % qty/bid)
 else:
  print ("All is well")
+
+def fix_books(buy_book_amount, sell_book_amount, bid_id, ask_id):
+      try:
+        if market_contract.call().buy(bid_id, buy_book_amount) and market_contract.call().buy(ask_id, sell_book_amount):
+          try: 
+            result_bb = market_contract.transact().buy(bid_id, buy_book_amount)
+            result_sb = market_contract.transact().buy(ask_id, sell_book_amount)
+            return [True, result_bb, result_sb]
+          except:
+            print("Transaction timed out.") 
+            return [False]
+      except:
+        return [False]
