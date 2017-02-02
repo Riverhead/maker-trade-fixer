@@ -102,16 +102,16 @@ ask_qty  = float(sell_orders[0][1])
 print ("Lowest ask is for %0.5f MKR @ %0.5f ETH/MKR" % (ask_qty,ask))
 
 #Make sure we have enough allowance
-if float(weth_contract.call().allowance(acct_owner, market_addr)) < 0.1:
-  result = weth_contract.call().approve(acct_owner, int(0.1*precision))
+if float(weth_contract.call().allowance(acct_owner, market_addr)) < 1:
+  result = weth_contract.call().approve(acct_owner, int(10000*precision))
   #print ("Update allowance: %s" % result)
   while weth_contract.call().allowance(weth_addr, market_addr) < 0.1:
     print("Waiting for allowance to be applied")
     time.sleep(3)
 print("WETH Allowance: %f" % (weth_contract.call().allowance(acct_owner, market_addr)/precision))
 
-if float(mkr_contract.call().allowance(acct_owner, market_addr)) < 0.1:
-  result = mkr_contract.call().approve(acct_owner, int(0.1*precision))
+if float(mkr_contract.call().allowance(acct_owner, market_addr)) < 1:
+  result = mkr_contract.call().approve(acct_owner, int(10000*precision))
   #print ("Update allowance: %s" % result)
   while mkr_contract.call().allowance(mkr_addr, market_addr) < 0.1:
     print("Waiting for allowance to be applied")
