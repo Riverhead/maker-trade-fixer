@@ -4,7 +4,7 @@ import json
 from web3 import Web3, RPCProvider
 from operator import itemgetter
 import time
-
+import sys
 
 precision = 1000000000000000000
 mkr_addr = "0xc66ea802717bfb9833400264dd12c2bceaa34a6d"
@@ -17,26 +17,38 @@ web3rpc = Web3(RPCProvider())
 web3rpc.eth.defaultAccount = acct_owner
 web3rpc.eth.defaultBlock = "latest"
 
+logFile = open('maker-matcher.json', 'a+')
+
+def print_log( entry ):
+      entry = '[{epoch:' + str(round(time.time(), 4)) + ',"log":' + entry + '}],\n'
+      logFile.write( entry )
+
 def fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
-      print("Fixing order: %f %f" % (buy_book_amount/precision, sell_book_amount/precision))
-      print("Pre-check...")
+      print_log('{"ETH":%f,"MKR":%f}' % (buy_book_amount/precision, sell_book_amount/precision))
       try:
-        if market_contract.call().buy(bid_id, buy_book_amount) and market_contract.call().buy(ask_id, sell_book_amount):
-        #if market_contract.call().buy(ask_id, sell_book_amount):
-          print("Passed pre-check")
-          try: 
+        if market_contract.call().buy(bid_id, buy_book_amount):
+            print("Submitting Buy Book order...")
             result_bb = market_contract.transact().buy(bid_id, buy_book_amount)
-            result_sb = market_contract.transact().buy(ask_id, sell_book_amount)
-            print("Orders submitted\n%s\n%s" % (result_bb, result_sb))
-            time.sleep(300)
-            return True
-          except:
-            print("Transaction timed out.") 
-            return False
+            print_log('{"buy_tx":"%s"}' % (result_bb))
+            while web3rpc.eth.getTransactionReceipt(result_bb) is None:
+               #print(".", end='', flush=True) 
+               time.sleep(2)
       except:
-        print("Failed pre-buy check\n")
+        print_log('"Failed pre Buy Book check, trying Sell Book"')
         return False
 
+      try:
+        if market_contract.call().buy(ask_id, sell_book_amount):
+            print("Submitting Sell Book Order...")
+            result_sb = market_contract.transact().buy(ask_id, sell_book_amount)
+            print_log('{"sell_tx":"%s"}' % (result_sb))
+            while web3rpc.eth.getTransactionReceipt(result_sb) is None:
+               #print(".", end='', flush=True) 
+               time.sleep(2)
+            return True
+      except:
+        print_log('"Failed Sell Book order"')
+        return False
 
 with open('market.abi', 'r') as abi_file:
   abi_json = abi_file.read().replace('\n','')
@@ -50,90 +62,96 @@ abi = json.loads(abi_json)
 weth_contract = web3rpc.eth.contract(abi, address=weth_addr)
 mkr_contract = web3rpc.eth.contract(abi, address=mkr_addr)
 
-weth_balance = float(weth_contract.call().balanceOf(acct_owner))/precision
-mkr_balance  = float(mkr_contract.call().balanceOf(acct_owner))/precision
+match_found = False
 
+while [ not match_found ]:
+  weth_balance = float(weth_contract.call().balanceOf(acct_owner))/precision
+  mkr_balance  = float(mkr_contract.call().balanceOf(acct_owner))/precision
 
-last_offer_id = market_contract.call().last_offer_id()
+  last_offer_id = market_contract.call().last_offer_id()
+  
+  id = 0
+  offers = []
+  
+  while id <  last_offer_id + 1:
+    offers.append(market_contract.call().offers(id))
+    id = id + 1
+  
+  print("\nBalances: %0.5f WETH - %0.5f MKR\n" % (weth_balance, mkr_balance))
+  #print("There are %i offers" % last_offer_id)
+  
+  id=0
+  
+  buy_orders = []
+  sell_orders = []
+  
+  for offer in offers:
+    valid = offer[5]
+    if valid:
+      sell_how_much = float(offer[0]) / precision
+      sell_which_token = offer[1]
+      buy_how_much = float(offer[2]) / precision
+      buy_which_token = offer[3]
+      owner = offer[4][2:8]
+  
+  
+      if sell_which_token == mkr_addr and buy_which_token == weth_addr:
+        sell_orders.append([id, sell_how_much, buy_how_much/sell_how_much, buy_how_much, owner])
+  
+      if sell_which_token == weth_addr and buy_which_token == mkr_addr:
+        buy_orders.append([id, buy_how_much, sell_how_much/buy_how_much, buy_how_much, owner])
+    id = id + 1
+  
+  #Sort the order books
+  buy_orders.sort(key=itemgetter(2), reverse=True)
+  bid_id = int(buy_orders[0][0])
+  bid    = float(buy_orders[0][2])
+  bid_qty     = float(buy_orders[0][1]) 
+  print ("Highest bid is for %0.5f MKR @ %0.5f ETH/MKR" % (bid_qty,bid))
+  
+  sell_orders.sort(key=itemgetter(2), reverse=False)
+  ask_id = int(sell_orders[0][0])
+  ask = float(sell_orders[0][2])
+  ask_qty  = float(sell_orders[0][1]) 
+  print ("Lowest ask is for %0.5f MKR @ %0.5f ETH/MKR" % (ask_qty,ask))
+  
+  #Make sure we have enough allowance
+  if float(weth_contract.call().allowance(acct_owner, market_addr)) < 1:
+    result = weth_contract.call().approve(acct_owner, int(10000*precision))
+    #print ("Update allowance: %s" % result)
+    while weth_contract.call().allowance(weth_addr, market_addr) < 0.1:
+      print("Waiting for allowance to be applied")
+      time.sleep(3)
+  
+  if float(mkr_contract.call().allowance(acct_owner, market_addr)) < 1:
+    result = mkr_contract.call().approve(acct_owner, int(10000*precision))
+    #print ("Update allowance: %s" % result)
+    while mkr_contract.call().allowance(mkr_addr, market_addr) < 0.1:
+      print("Waiting for allowance to be applied")
+      time.sleep(3)
+  
+  if round(bid,5) >= round(ask,5):
+    match_found = True
+    print("Found a match, processing...\n")
+    #print("\nAction needed!")
+    if bid_qty > ask_qty:
+      qty = ask_qty
+      if weth_balance < ask_qty:
+        qty = weth_balance
+    else:
+      qty = bid_qty
+      if mkr_balance < bid_qty:
+        qty = mkr_balance
+    buy_book_amount  = int(qty*bid*precision)
+    sell_book_amount = int(qty*precision)
+    while not fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
+      print("Something went wrong, aborting")
+      print_log('"Something went wrong, aborting"')
+      logFile.close()
+      sys.exit()
+    print("Settled order for %0.5f MKR @ %f ETH/MKR" % (float(qty), float(bid)))
+    #print_log("Settled order for %0.5f MKR" % (float(qty), float(bid)))
+    break
 
-id = 0
-offers = []
-
-while id <  last_offer_id + 1:
-  offers.append(market_contract.call().offers(id))
-  id = id + 1
-
-print("\nBalances: %0.5f WETH - %0.5f MKR\n" % (weth_balance, mkr_balance))
-print("There are %i offers" % last_offer_id)
-
-id=0
-
-buy_orders = []
-sell_orders = []
-
-for offer in offers:
-  valid = offer[5]
-  if valid:
-    sell_how_much = float(offer[0]) / precision
-    sell_which_token = offer[1]
-    buy_how_much = float(offer[2]) / precision
-    buy_which_token = offer[3]
-    owner = offer[4][2:8]
-
-
-    if sell_which_token == mkr_addr and buy_which_token == weth_addr:
-      sell_orders.append([id, sell_how_much, buy_how_much/sell_how_much, buy_how_much, owner])
-
-    if sell_which_token == weth_addr and buy_which_token == mkr_addr:
-      buy_orders.append([id, buy_how_much, sell_how_much/buy_how_much, buy_how_much, owner])
-  id = id + 1
-
-#Sort the order books
-buy_orders.sort(key=itemgetter(2), reverse=True)
-bid_id = int(buy_orders[0][0])
-bid    = float(buy_orders[0][2])
-bid_qty     = float(buy_orders[0][1]) 
-print ("Highest bid is for %0.5f MKR @ %0.5f ETH/MKR" % (bid_qty,bid))
-
-sell_orders.sort(key=itemgetter(2), reverse=False)
-ask_id = int(sell_orders[0][0])
-ask = float(sell_orders[0][2])
-ask_qty  = float(sell_orders[0][1]) 
-print ("Lowest ask is for %0.5f MKR @ %0.5f ETH/MKR" % (ask_qty,ask))
-
-#Make sure we have enough allowance
-if float(weth_contract.call().allowance(acct_owner, market_addr)) < 1:
-  result = weth_contract.call().approve(acct_owner, int(10000*precision))
-  #print ("Update allowance: %s" % result)
-  while weth_contract.call().allowance(weth_addr, market_addr) < 0.1:
-    print("Waiting for allowance to be applied")
-    time.sleep(3)
-print("WETH Allowance: %f" % (weth_contract.call().allowance(acct_owner, market_addr)/precision))
-
-if float(mkr_contract.call().allowance(acct_owner, market_addr)) < 1:
-  result = mkr_contract.call().approve(acct_owner, int(10000*precision))
-  #print ("Update allowance: %s" % result)
-  while mkr_contract.call().allowance(mkr_addr, market_addr) < 0.1:
-    print("Waiting for allowance to be applied")
-    time.sleep(3)
-print("MKR Allowance: %f" % (mkr_contract.call().allowance(acct_owner, market_addr)/precision))
-
-if round(bid,5) >= round(ask,5):
-  print("\nAction needed!")
-  if bid_qty > ask_qty:
-    qty = ask_qty
-    if weth_balance < ask_qty:
-      qty = weth_balance
-  else:
-    qty = bid_qty
-    if mkr_balance < bid_qty:
-      qty = mkr_balance
-  buy_book_amount  = int(qty*bid*precision)
-  sell_book_amount = int(qty*precision)
-  while not fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
-    print("Something went wrong, trying again")
-    time.sleep(5)
-  print("Settled order for %0.5f MKR" % (float(qty)/float(bid)))
-else:
- print ("All is well")
-
+logFile.close()
+time.sleep(30) #Give things a chance to settle out
