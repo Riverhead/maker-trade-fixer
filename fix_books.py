@@ -19,35 +19,35 @@ web3rpc.eth.defaultBlock = "latest"
 
 logFile = open('maker-matcher.json', 'a+')
 
-def print_log( entry ):
-      entry = '[{epoch:' + str(round(time.time(), 4)) + ',"log":' + entry + '}],\n'
+def print_log( log_type, entry ):
+      entry = '[{epoch:' + str(round(time.time(), 4)) + ',"' + log_type + '":' + entry + '}],\n'
       logFile.write( entry )
 
 def fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
-      print_log('{"ETH":%f,"MKR":%f}' % (buy_book_amount/precision, sell_book_amount/precision))
+      print_log('log','{"ETH":%f,"MKR":%f}' % (buy_book_amount/precision, sell_book_amount/precision))
       try:
         if market_contract.call().buy(bid_id, buy_book_amount):
             print("Submitting Buy Book order...")
             result_bb = market_contract.transact().buy(bid_id, buy_book_amount)
-            print_log('{"buy_tx":"%s"}' % (result_bb))
+            print_log('log','{"buy_tx":"%s"}' % (result_bb))
             while web3rpc.eth.getTransactionReceipt(result_bb) is None:
                #print(".", end='', flush=True) 
                time.sleep(2)
       except:
-        print_log('"Failed pre Buy Book check, trying Sell Book"')
+        print_log('ERR','"Failed pre Buy Book check, trying Sell Book"')
         return False
 
       try:
         if market_contract.call().buy(ask_id, sell_book_amount):
             print("Submitting Sell Book Order...")
             result_sb = market_contract.transact().buy(ask_id, sell_book_amount)
-            print_log('{"sell_tx":"%s"}' % (result_sb))
+            print_log('log','{"sell_tx":"%s"}' % (result_sb))
             while web3rpc.eth.getTransactionReceipt(result_sb) is None:
                #print(".", end='', flush=True) 
                time.sleep(2)
             return True
       except:
-        print_log('"Failed Sell Book order"')
+        print_log('ERR','"Failed Sell Book order"')
         return False
 
 with open('market.abi', 'r') as abi_file:
@@ -146,11 +146,11 @@ while [ not match_found ]:
     sell_book_amount = int(qty*precision)
     while not fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
       print("Something went wrong, aborting")
-      print_log('"Something went wrong, aborting"')
+      print_log('ERR','"Something went wrong, aborting"')
       logFile.close()
       sys.exit()
     print("Settled order for %0.5f MKR @ %f ETH/MKR" % (float(qty), float(bid)))
-    #print_log("Settled order for %0.5f MKR" % (float(qty), float(bid)))
+    #print_log('log',"Settled order for %0.5f MKR" % (float(qty), float(bid)))
     break
 
 logFile.close()
