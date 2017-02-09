@@ -24,18 +24,18 @@ def print_log( log_type, entry ):
       entry = '[{epoch:' + str(round(time.time(), 4)) + ',"' + log_type + '":' + entry + '}],\n'
       logFile.write( entry )
 
-def fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
+def fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
       print_log('log','{"ETH":%f,"MKR":%f}' % (buy_book_amount/precision, sell_book_amount/precision))
       try:
-        print("Submitting Buy Book order...%i %i" % (bid_id, buy_book_amount))
+        print("Submitting Buy Book order", end='', flush=True )
         if market_contract.call().buy(bid_id, buy_book_amount):
-            print("Passed Buy Pre-check")
             try:
               result_bb = market_contract.transact().buy(bid_id, buy_book_amount)
               print_log('log','{"buy_tx":"%s"}' % (result_bb))
               while web3rpc.eth.getTransactionReceipt(result_bb) is None:
-                 #print(".", end='', flush=True) 
+                 print(".", end='', flush=True) 
                  time.sleep(2)
+              print("")
             except:
               print_log('ERR','"Failed Buy Book transaction"')
               return False
@@ -47,14 +47,19 @@ def fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid
         return False
 
       try:
-        print("Submitting Sell Book Order...")
+        print("Submitting Sell Book Order", end='', flush=True)
         if market_contract.call().buy(ask_id, sell_book_amount):
-            result_sb = market_contract.transact().buy(ask_id, sell_book_amount)
-            print_log('log','{"sell_tx":"%s"}' % (result_sb))
-            while web3rpc.eth.getTransactionReceipt(result_sb) is None:
-               #print(".", end='', flush=True) 
-               time.sleep(2)
-            return True
+            try: 
+              result_sb = market_contract.transact().buy(ask_id, sell_book_amount)
+              print_log('log','{"sell_tx":"%s"}' % (result_sb))
+              while web3rpc.eth.getTransactionReceipt(result_sb) is None:
+                 print(".", end='', flush=True) 
+                 time.sleep(2)
+              print("")
+              return True
+            except:
+              print_log('ERR','"Failed Sell Book transaction"')
+              return False
         else:
               print_log('ERR','"Failed Sell Book transaction"')
               return False
@@ -143,7 +148,7 @@ while [ not match_found ]:
   
   if round(bid,5) >= round(ask,5):
     match_found = True
-    print("Found a match")
+    print("Match found")
     #print("\nAction needed!")
     if weth_balance < ask_qty:
       ask_qty = weth_balance
@@ -157,12 +162,11 @@ while [ not match_found ]:
     bid = round(bid, 5)
     ask = round(ask, 5)
 
-    print("%s %s %s)" % (qty, bid, ask))
-
     buy_book_amount  = int(qty*bid*precision/cleanup_rounding)*cleanup_rounding
     sell_book_amount = int(qty*precision/cleanup_rounding)*cleanup_rounding
-    while not fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
+    if not fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
       print("Something went wrong, aborting")
+      print("Last Values: precision: %s buy_book_amount: %s sell_book_amount %s bid_id %s ask_id %s" % (precision, buy_book_amount, sell_book_amount, bid_id, ask_id))
       print_log('ERR','"Something went wrong, aborting"')
       logFile.close()
       sys.exit()
