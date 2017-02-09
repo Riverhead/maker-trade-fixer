@@ -134,14 +134,10 @@ while [ not match_found ]:
     match_found = True
     print("Found a match, processing...\n")
     #print("\nAction needed!")
-    if bid_qty > ask_qty:
-      qty = ask_qty
-      if weth_balance < ask_qty:
-        qty = weth_balance
-    else:
-      qty = bid_qty
-      if mkr_balance < bid_qty:
-        qty = mkr_balance
+    if weth_balance < ask_qty:
+      qty = weth_balance
+    if mkr_balance < qty:
+      qty = mkr_balance
     buy_book_amount  = int(qty*bid*precision)
     sell_book_amount = int(qty*precision)
     while not fix_books(market_contract, precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
