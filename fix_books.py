@@ -5,13 +5,16 @@ from web3 import Web3, RPCProvider
 from operator import itemgetter
 import time
 import sys
+import datetime
+import math
 
 precision = 1000000000000000000
-cleanup_rounding = 1000 #Clean up the very insignificant digits that collect due to rounding errors.
+dust      = 10000000000000
 mkr_addr = "0xc66ea802717bfb9833400264dd12c2bceaa34a6d"
 weth_addr = "0xecf8f87f810ecf450940c9f60066b4a7a501d6a7" 
 geth_addr = "0xa74476443119A942dE498590Fe1f2454d7D4aC0d"
-market_addr = "0xa1B5eEdc73a978d181d1eA322ba20f0474Bb2A25"
+market_addr = "0xC350eBF34B6d83B64eA0ee4E39b6Ebe18F02aD2F"
+#market_addr = "0x454e4f5bb176a54638f727b3314c709cb4f66dae"
 acct_owner = "0x6E39564ecFD4B5b0bA36CD944a46bCA6063cACE5"
 
 web3rpc = Web3(RPCProvider())
@@ -21,14 +24,17 @@ web3rpc.eth.defaultBlock = "latest"
 logFile = open('maker-matcher.json', 'a+')
 
 def print_log( log_type, entry ):
-      entry = '[{epoch:' + str(round(time.time(), 4)) + ',"' + log_type + '":' + entry + '}],\n'
+      ts = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+      entry = '[{date:' + ts + ',"' + log_type + '":' + entry + '}],\n'
       logFile.write( entry )
 
 def fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
+      print('"ETH":%f,"MKR":%f}' % (buy_book_amount/precision, sell_book_amount/precision))
       print_log('log','{"ETH":%f,"MKR":%f}' % (buy_book_amount/precision, sell_book_amount/precision))
       try:
         print("Submitting Buy Book order", end='', flush=True )
-        if market_contract.call().buy(bid_id, buy_book_amount):
+        try:
+          if market_contract.call().buy(bid_id, buy_book_amount):
             try:
               result_bb = market_contract.transact().buy(bid_id, buy_book_amount)
               print_log('log','{"buy_tx":"%s"}' % (result_bb))
@@ -37,11 +43,16 @@ def fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
                  time.sleep(2)
               print("")
             except:
+              print("")
               print_log('ERR','"Failed Buy Book transaction"')
               return False
-        else:
+          else:
+              print("")
               print_log('ERR','"Failed Buy Book transaction"')
               return False
+        except:
+          print("")
+          print("Buy checked failed to check.") 
       except:
         print_log('ERR','"Failed pre Buy Book check, trying Sell Book"')
         return False
@@ -67,7 +78,7 @@ def fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
         print_log('ERR','"Failed Sell Book order"')
         return False
 
-with open('market.abi', 'r') as abi_file:
+with open('simple_market.abi', 'r') as abi_file:
   abi_json = abi_file.read().replace('\n','')
 abi = json.loads(abi_json)
 market_contract = web3rpc.eth.contract(abi, address=market_addr)
@@ -82,6 +93,7 @@ mkr_contract = web3rpc.eth.contract(abi, address=mkr_addr)
 match_found = False
 
 while [ not match_found ]:
+  time.sleep(5)
   weth_balance = float(weth_contract.call().balanceOf(acct_owner))/precision
   mkr_balance  = float(mkr_contract.call().balanceOf(acct_owner))/precision
 
@@ -104,7 +116,7 @@ while [ not match_found ]:
   
   for offer in offers:
     valid = offer[5]
-    if valid:
+    if valid :
       sell_how_much = float(offer[0]) / precision
       sell_which_token = offer[1]
       buy_how_much = float(offer[2]) / precision
@@ -119,37 +131,78 @@ while [ not match_found ]:
     id = id + 1
   
   #Sort the order books
-  buy_orders.sort(key=itemgetter(2), reverse=True)
-  bid_id = int(buy_orders[0][0])
-  bid    = float(buy_orders[0][2])
-  bid_qty     = float(buy_orders[0][1]) 
-  print ("Highest bid is for %0.5f MKR @ %0.5f ETH/MKR" % (bid_qty,bid))
+  if len(buy_orders) > 0:
+    depth = len(buy_orders)
+    #find highest non dust bid
+    bid_qty = 0
+    bid_id = 0
+    bid = 0
+    current_depth = 0
+    buy_orders.sort(key=itemgetter(2), reverse=True)
+    while current_depth <= len(buy_orders):
+      bid_qty     = float(buy_orders[current_depth][1]) 
+      if bid_qty > 0.0001:
+        bid    = float(buy_orders[current_depth][2])
+        bid_id = int(buy_orders[current_depth][0])
+        print ("Highest bid is for %f MKR @ %f ETH/MKR" % (bid_qty,bid))
+        break
+      else:
+        current_depth = current_depth + 1
+  else:
+    print ("Buy book is empty")
+    continue
   
-  sell_orders.sort(key=itemgetter(2), reverse=False)
-  ask_id = int(sell_orders[0][0])
-  ask = float(sell_orders[0][2])
-  ask_qty  = float(sell_orders[0][1]) 
-  print ("Lowest ask is for %0.5f MKR @ %0.5f ETH/MKR" % (ask_qty,ask))
-  
+  if len(sell_orders) > 0:
+    depth = len(sell_orders)
+    sell_orders.sort(key=itemgetter(2), reverse=False)
+    #find lowest non dust ask
+    ask_qty = 0
+    ask_id = 0
+    ask = 0
+    current_depth = 0
+    while current_depth <= len(sell_orders):
+      ask_qty  = float(sell_orders[current_depth][1]) 
+      if ask_qty > 0.0001:
+        ask_id = int(sell_orders[current_depth][0])
+        ask = float(sell_orders[current_depth][2])
+        print ("Lowest ask is for %f MKR @ %f ETH/MKR" % (ask_qty,ask))
+        break
+      else:
+        current_depth = current_depth + 1
+  else:
+    print ("Sell book is empty")
+    continue
+
   #Make sure we have enough allowance
-  if float(weth_contract.call().allowance(acct_owner, market_addr)) < 1:
-    result = weth_contract.call().approve(acct_owner, int(10000*precision))
-    #print ("Update allowance: %s" % result)
-    while weth_contract.call().allowance(weth_addr, market_addr) < 0.1:
-      print("Waiting for allowance to be applied")
-      time.sleep(3)
+  allowance = float(weth_contract.call().allowance(acct_owner, market_addr))/precision
+  if allowance < 100:
+    print("Out of WETH allowance")
+    print_log("ERR", "Out of WETH allowance")
+    continue
+#    result = weth_contract.transact().approve(acct_owner, int(10000*precision))
+#    print ("Update weth allowance: %s -> 10000" % (allowance))
+#    while web3rpc.eth.getTransactionReceipt(result) is None:
+#      print(".", end='', flush=True) 
+#      time.sleep(2)
+#    print("")
   
-  if float(mkr_contract.call().allowance(acct_owner, market_addr)) < 1:
-    result = mkr_contract.call().approve(acct_owner, int(10000*precision))
-    #print ("Update allowance: %s" % result)
-    while mkr_contract.call().allowance(mkr_addr, market_addr) < 0.1:
-      print("Waiting for allowance to be applied")
-      time.sleep(3)
-  
-  if round(bid,5) >= round(ask,5):
+  allowance = float(weth_contract.call().allowance(acct_owner, market_addr))/precision
+  if allowance < 100:
+    print("Out of wETH allowance")
+    print_log("ERR", "Out of MKR allowance")
+    continue
+#    result = mkr_contract.transact().approve(acct_owner, int(10000*precision))
+#    print ("Update mkr allowance: %s -> 10000" % (allowance))
+#    while web3rpc.eth.getTransactionReceipt(result) is None:
+#      print(".", end='', flush=True) 
+#      time.sleep(2)
+#    print("")
+ 
+  if math.floor(bid*100000) >= math.floor(ask*100000):
     match_found = True
     print("Match found")
     #print("\nAction needed!")
+
     if weth_balance < ask_qty:
       ask_qty = weth_balance
     if mkr_balance < bid_qty:
@@ -158,21 +211,28 @@ while [ not match_found ]:
       qty = bid_qty
     else:
       qty = ask_qty
-    qty = round(qty, 5)
+    qty = round(qty, 18)
     bid = round(bid, 5)
     ask = round(ask, 5)
 
-    buy_book_amount  = int(qty*bid*precision/cleanup_rounding)*cleanup_rounding
-    sell_book_amount = int(qty*precision/cleanup_rounding)*cleanup_rounding
+    if qty <= 0.001:
+      #print_log("ERR", "Order is too small to process")
+      print("Order is too small.")
+      continue
+
+    buy_book_amount  = math.floor(int(qty*bid*precision)/dust)*dust
+    sell_book_amount = math.floor(int(qty*precision)/dust)*dust
+
+    print("buy_book_amount: %s sell_book_amount %s bid_id %s ask_id %s" % (buy_book_amount/precision, sell_book_amount/precision, bid_id, ask_id))
     if not fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
       print("Something went wrong, aborting")
-      print("Last Values: precision: %s buy_book_amount: %s sell_book_amount %s bid_id %s ask_id %s" % (precision, buy_book_amount, sell_book_amount, bid_id, ask_id))
+      print("buy_book_amount: %s sell_book_amount %s bid_id %s ask_id %s" % (buy_book_amount, sell_book_amount, bid_id, ask_id))
       print_log('ERR','"Something went wrong, aborting"')
       logFile.close()
       sys.exit()
-    print("Settled order for %0.5f MKR @ %f ETH/MKR" % (float(qty), float(bid)))
-    #print_log('log',"Settled order for %0.5f MKR" % (float(qty), float(bid)))
+    print("Settled order for %f MKR @ %f ETH/MKR" % (float(qty), float(bid)))
+    print_log('log',"Settled order for %0.5f MKR" % (float(qty), float(bid)))
     break
-
+  time.sleep(5)
 logFile.close()
 time.sleep(30) #Give things a chance to settle out
