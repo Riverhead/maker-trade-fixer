@@ -17,7 +17,7 @@ market_addr = "0xC350eBF34B6d83B64eA0ee4E39b6Ebe18F02aD2F"
 #market_addr = "0x454e4f5bb176a54638f727b3314c709cb4f66dae"
 acct_owner = "0x6E39564ecFD4B5b0bA36CD944a46bCA6063cACE5"
 
-web3rpc = Web3(RPCProvider())
+web3rpc = Web3(RPCProvider(port=8545))
 web3rpc.eth.defaultAccount = acct_owner
 web3rpc.eth.defaultBlock = "latest"
 
@@ -81,14 +81,14 @@ def fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
 with open('simple_market.abi', 'r') as abi_file:
   abi_json = abi_file.read().replace('\n','')
 abi = json.loads(abi_json)
-market_contract = web3rpc.eth.contract(abi, address=market_addr)
+market_contract = web3rpc.eth.contract(abi=abi, address=market_addr)
 
 
 with open('erc20.abi', 'r') as abi_file:
   abi_json = abi_file.read().replace('\n','')
 abi = json.loads(abi_json)
-weth_contract = web3rpc.eth.contract(abi, address=weth_addr)
-mkr_contract = web3rpc.eth.contract(abi, address=mkr_addr)
+weth_contract = web3rpc.eth.contract(abi=abi, address=weth_addr)
+mkr_contract = web3rpc.eth.contract(abi=abi, address=mkr_addr)
 
 match_found = False
 
@@ -122,12 +122,16 @@ while [ not match_found ]:
       buy_how_much = float(offer[2]) / precision
       buy_which_token = offer[3]
       owner = offer[4][2:8]
+
+      bid = float(offer[0])/float(offer[2])
+      ask = float(offer[2])/float(offer[0])
+      
   
       if sell_which_token == mkr_addr and buy_which_token == weth_addr:
-        sell_orders.append([id, sell_how_much, buy_how_much/sell_how_much, buy_how_much, owner])
+        sell_orders.append([id, sell_how_much, ask, buy_how_much, owner])
   
       if sell_which_token == weth_addr and buy_which_token == mkr_addr:
-        buy_orders.append([id, buy_how_much, sell_how_much/buy_how_much, buy_how_much, owner])
+        buy_orders.append([id, buy_how_much, bid, buy_how_much, owner])
     id = id + 1
   
   #Sort the order books
@@ -198,7 +202,7 @@ while [ not match_found ]:
 #      time.sleep(2)
 #    print("")
  
-  if math.floor(bid*100000) >= math.floor(ask*100000):
+  if round(bid*100000) >= round(ask*100000):
     match_found = True
     print("Match found")
     #print("\nAction needed!")
@@ -220,10 +224,13 @@ while [ not match_found ]:
       print("Order is too small.")
       continue
 
-    buy_book_amount  = math.floor(int(qty*bid*precision)/dust)*dust
-    sell_book_amount = math.floor(int(qty*precision)/dust)*dust
+    buy_book_amount  = int(qty*bid_long*precision)
+    buy_book_amount  = buy_book_amount
 
-    print("buy_book_amount: %s sell_book_amount %s bid_id %s ask_id %s" % (buy_book_amount/precision, sell_book_amount/precision, bid_id, ask_id))
+    sell_book_amount = int(qty*precision)
+    sell_book_amount = sell_book_amount
+
+    #print("buy_book_amount: %s sell_book_amount %s bid_id %s ask_id %s" % (buy_book_amount/precision, sell_book_amount/precision, bid_id, ask_id))
     if not fix_books(precision, buy_book_amount, sell_book_amount, bid_id, ask_id):
       print("Something went wrong, aborting")
       print("buy_book_amount: %s sell_book_amount %s bid_id %s ask_id %s" % (buy_book_amount, sell_book_amount, bid_id, ask_id))
@@ -231,8 +238,9 @@ while [ not match_found ]:
       logFile.close()
       sys.exit()
     print("Settled order for %f MKR @ %f ETH/MKR" % (float(qty), float(bid)))
-    print_log('log',"Settled order for %0.5f MKR" % (float(qty), float(bid)))
+    profit = round((bid - ask) * (buy_how_much), 4)
+    print_log('log',"Settled order for " + str(float(qty)) + "MKR. Profit/Loss: " + str(profit) + " MKR" )
     break
   time.sleep(5)
 logFile.close()
-time.sleep(30) #Give things a chance to settle out
+time.sleep(10) #Give things a chance to settle out
